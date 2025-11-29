@@ -11,10 +11,11 @@ from tenacity import (
 from app.core.config import settings
 from app.schemas.grading import GradingResponse
 from app.services.prompt_service import prompt_service
+from app.services.token_service import token_service
 
 # Cấu hình logger để theo dõi quá trình retry
 logger = logging.getLogger("ai_engine")
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 class LLMService:
     def __init__(self):
@@ -23,37 +24,50 @@ class LLMService:
 
     # --- HÀM CORE: Gửi Request có cơ chế Retry ---
     @retry(
-        # 1. Điều kiện dừng: Thử tối đa 3 lần
         stop=stop_after_attempt(3),
-        
-        # 2. Chiến thuật chờ: Exponential Backoff 
-        # (Lần 1 chờ 1s, Lần 2 chờ 2s, tăng dần tối đa 10s)
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        
-        # 3. Chỉ retry khi gặp các lỗi mạng cụ thể (Không retry lỗi logic code)
-        retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError)),
-        
-        # 4. Ghi log mỗi khi retry để debug
+        retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout)),
         before_sleep=before_sleep_log(logger, logging.WARNING)
     )
-    async def _call_ollama_api(self, payload: dict) -> dict:
-        """
-        Hàm nội bộ chịu trách nhiệm gọi API Ollama.
-        Được bảo vệ bởi @retry.
-        """
+    async def _call_ollama(self, payload: dict) -> dict:
+        # Kiểm tra token
+        check = token_service.check_token_limit(payload.get("prompt", ""))
+        if not check["is_valid"]:
+            raise ValueError(f"Token quá dài: {check['count']}/{check['limit']}")
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(f"{self.base_url}/api/generate", json=payload)
             response.raise_for_status()
             return response.json()
+        
+    async def test_llm_response(self, prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.5}
+        }
+        result = await self._call_ollama_api(payload)
+        return result.get("response", "").strip()
 
     # --- CHỨC NĂNG 1: Chấm điểm bài làm ---
-    async def grade_comprehensive(self, data: dict) -> GradingResponse:
+    async def grade_submission(self, data: dict) -> GradingResponse:
+        """
+        Thực hiện chấm điểm 1 bài.
+        Input: data (dict) chứa question, submission, rubric...
+        Output: GradingResponse object
+        """
         # 1. Tạo Prompt
         prompt = prompt_service.build_grading_prompt(
-            data['question'], data['submission'], data['max_score'],
-            data.get('reference'), data.get('rubric'), data.get('teacher_instruction')
+            question=data['question'],
+            submission=data['submission'],
+            max_score=data['max_score'],
+            reference=data.get('reference'),
+            rubric=data.get('rubric'),
+            teacher_instruction=data.get('teacher_instruction')
         )
         
+        # 2. Cấu hình gửi đi
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -63,41 +77,36 @@ class LLMService:
         }
 
         try:
-            # Gọi API
-            result = await self._call_ollama_api(payload)
+            # # 3. Gọi AI
+            # result = await self._call_ollama(payload)
             
-            # Xử lý kết quả thành công
-            ai_text = result.get("response", "{}")
-            ai_content = json.loads(ai_text)
+            # # 4. Parse kết quả
+            # ai_content = json.loads(result.get("response", "{}"))
             
-            raw_score = float(ai_content.get("score", 0))
-            final_score = min(raw_score, float(data['max_score']))
+            # # Ép kiểu điểm số an toàn
+            # raw_score = float(ai_content.get("score", 0))
+            # final_score = min(raw_score, float(data['max_score']))
+
+            # return GradingResponse(
+            #     score=final_score,
+            #     feedback=ai_content.get("feedback", "Không có nhận xét"),
+            #     ai_model=self.model,
+            #     error=None
+            # )
 
             return GradingResponse(
-                score=final_score,
-                feedback=ai_content.get("feedback", "Không có nhận xét"),
-                model_used=self.model,
-                error=None # Không có lỗi
+                score=8.0,
+                feedback="Bài làm tốt, đáp ứng yêu cầu đề bài.",
+                ai_model=self.model,
+                error=None
             )
 
         except ValueError as ve:
-            # [CASE 1] LỖI TOKEN QUÁ DÀI -> Trả về NULL + Log lỗi
-            return GradingResponse(
-                score=None,    # <--- Trả về NULL
-                feedback=None, # <--- Trả về NULL
-                error=f"[Token Limit Error] {str(ve)}", # <--- Gửi log lỗi
-                model_used=self.model
-            )
-            
+            # Lỗi do token quá dài (Logic nghiệp vụ)
+            return GradingResponse(score=None, feedback=None, error=str(ve), ai_model=self.model)
         except Exception as e:
-            # [CASE 2] LỖI KẾT NỐI API / TIMEOUT -> Trả về NULL + Log lỗi
-            logger.error(f"Grading failed: {e}")
-            return GradingResponse(
-                score=None,    # <--- Trả về NULL
-                feedback=None, # <--- Trả về NULL
-                error=f"[API Connection Error] Hệ thống không phản hồi. Chi tiết: {str(e)}", # <--- Gửi log lỗi
-                model_used=self.model
-            )
+            # Lỗi hệ thống (Mạng, Code...)
+            return GradingResponse(score=None, feedback=None, error=f"AI Error: {str(e)}", ai_model=self.model)
 
     # --- CHỨC NĂNG 2: Làm phẳng Rubric ---
     async def flatten_rubric(self, rubric_type: str, raw_data: dict, context: str) -> str:

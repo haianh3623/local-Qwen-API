@@ -7,7 +7,7 @@ from docx import Document
 
 # Cấu hình logging
 logger = logging.getLogger("file_parser")
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 class FileParserService:
     def _clean_text(self, text: str) -> str:

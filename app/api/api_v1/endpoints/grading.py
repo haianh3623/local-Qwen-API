@@ -1,83 +1,71 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from typing import List, Optional, Union
-from app.schemas.grading import GradingResponse
+import uuid
+
+# Import đúng các module đã sửa
 from app.services.llm_service import llm_service
-from app.services.file_parser import file_parser
+from app.core.task_runner import task_runner
+from app.core.common import process_upload_files, validate_submission_content 
+# (Đảm bảo bạn đã có file app/core/common.py từ bước trước)
 
 router = APIRouter()
 
-@router.post("/comprehensive", response_model=GradingResponse)
-async def grade_submission_comprehensive(
-    # --- 1. ĐỀ BÀI ---
-    assignment_content: str = Form(..., description="Nội dung đề bài"),
+@router.post("/async-batch", status_code=202)
+async def grade_submission_async(
+    # --- Meta ---
+    callback_url: str = Form(..., description="Webhook URL nhận kết quả"),
+    request_id: str = Form(None),
     
-    # [FIX] Chấp nhận cả List lẫn Single File
-    assignment_attachments: Union[List[UploadFile], UploadFile, None] = File(None),
-
-    # --- 2. BÀI LÀM ---
+    # --- Inputs ---
+    assignment_content: str = Form(...),
+    assignment_attachments: Union[List[UploadFile], List[str], None] = File(None),
+    
     student_submission_text: Optional[str] = Form(None),
+    student_submission_files: Union[List[UploadFile], List[str], None] = File(None),
     
-    # [FIX] Chấp nhận cả List lẫn Single File
-    student_submission_files: Union[List[UploadFile], UploadFile, None] = File(None),
-
-    # --- 3. THAM CHIẾU ---
     reference_answer_text: Optional[str] = Form(None),
-    reference_answer_file: Optional[UploadFile] = File(None), # File đơn thì giữ nguyên
+    reference_answer_file: Union[UploadFile, str, None] = File(None),
     
     grading_criteria: Optional[str] = Form(None),
     teacher_instruction: Optional[str] = Form(None),
-    max_score: float = Form(10.0)
+    max_score: float = Form(10.0),
+    
+    # --- Background ---
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
-    
-    # --- HÀM CHUẨN HÓA (Normalization) ---
-    # Chuyển đổi mọi thứ thành List để dễ xử lý vòng lặp bên dưới
-    def normalize_files(file_input: Union[List[UploadFile], UploadFile, None]) -> List[UploadFile]:
-        if not file_input:
-            return []
-        if isinstance(file_input, list):
-            return file_input
-        return [file_input] # Nếu là file đơn, gói nó vào list
+    # 1. Sinh ID nếu thiếu
+    if not request_id:
+        request_id = str(uuid.uuid4())
 
-    # Chuẩn hóa input ngay đầu hàm
-    attachments_list = normalize_files(assignment_attachments)
-    submission_files_list = normalize_files(student_submission_files)
+    # 2. Xử lý file (Dùng hàm chung trong common.py)
+    q_files = await process_upload_files(assignment_attachments)
+    s_files = await process_upload_files(student_submission_files)
+    r_files = await process_upload_files(reference_answer_file)
 
-    # --- VALIDATION ---
-    has_text = student_submission_text and student_submission_text.strip()
-    has_file = len(submission_files_list) > 0
-    
-    if not has_text and not has_file:
-        raise HTTPException(status_code=400, detail="Sinh viên chưa nộp bài (Thiếu cả text và file).")
+    # 3. Validate
+    validate_submission_content(student_submission_text, s_files)
 
-    # --- GIAI ĐOẠN 1: PARSE DATA ---
-    
-    # 1. Tổng hợp Đề bài
-    full_question = assignment_content
-    for f in attachments_list:
-        full_question += await file_parser.parse_file_to_text(f)
-
-    # 2. Tổng hợp Bài làm
-    full_submission = student_submission_text or ""
-    for f in submission_files_list:
-        full_submission += await file_parser.parse_file_to_text(f)
-
-    # 3. Tổng hợp Đáp án mẫu
-    full_reference = reference_answer_text or ""
-    if reference_answer_file:
-        full_reference += await file_parser.parse_file_to_text(reference_answer_file)
-
-    # --- GIAI ĐOẠN 2: GỌI AI ---
-    
+    # 4. Gom dữ liệu
     grading_data = {
-        "question": full_question,
-        "submission": full_submission,
-        "reference": full_reference, 
+        "question": assignment_content + q_files,
+        "submission": (student_submission_text or "") + s_files,
+        "reference": (reference_answer_text or "") + r_files,
         "rubric": grading_criteria,
         "teacher_instruction": teacher_instruction,
         "max_score": max_score
     }
 
-    try:
-        return await llm_service.grade_comprehensive(grading_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi xử lý: {str(e)}")
+    # 5. Đẩy vào Background Task (Dùng Task Runner)
+    background_tasks.add_task(
+        task_runner.run_task_and_callback,      # Gọi hàm điều phối của Task Runner
+        processing_function=llm_service.grade_submission, # Truyền hàm logic chấm điểm vào
+        input_data=grading_data,                # Truyền dữ liệu vào
+        callback_url=callback_url,
+        request_id=request_id
+    )
+
+    return {
+        "status": "queued",
+        "message": "Đã tiếp nhận vào hàng đợi.",
+        "request_id": request_id
+    }

@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Grading"
@@ -7,6 +8,9 @@ class Settings(BaseSettings):
     MODEL_NAME: str
 
     MAX_INPUT_TOKENS: int = 3000
+    MAX_CONCURRENT_REQUESTS: int = 1
+
+    SHARED_SECRET_KEY: Optional[str] = None
 
     class Config:
         env_file = ".env"

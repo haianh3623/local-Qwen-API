@@ -53,7 +53,7 @@ async def ask_llm(request: QuestionRequest):
     Nhập câu hỏi vào field 'question'.
     """
     # Gọi service để lấy câu trả lời
-    answer = await llm_service.ask_question(request.question)
+    answer = await llm_service.test_llm_response(request.question)
     
     return {
         "your_question": request.question,
