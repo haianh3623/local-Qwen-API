@@ -77,29 +77,29 @@ class LLMService:
         }
 
         try:
-            # # 3. Gọi AI
-            # result = await self._call_ollama(payload)
+            # 3. Gọi AI
+            result = await self._call_ollama(payload)
             
-            # # 4. Parse kết quả
-            # ai_content = json.loads(result.get("response", "{}"))
+            # 4. Parse kết quả
+            ai_content = json.loads(result.get("response", "{}"))
             
-            # # Ép kiểu điểm số an toàn
-            # raw_score = float(ai_content.get("score", 0))
-            # final_score = min(raw_score, float(data['max_score']))
-
-            # return GradingResponse(
-            #     score=final_score,
-            #     feedback=ai_content.get("feedback", "Không có nhận xét"),
-            #     ai_model=self.model,
-            #     error=None
-            # )
+            # Ép kiểu điểm số an toàn
+            raw_score = float(ai_content.get("score", 0))
+            final_score = min(raw_score, float(data['max_score']))
 
             return GradingResponse(
-                score=8.0,
-                feedback="Bài làm tốt, đáp ứng yêu cầu đề bài.",
+                score=final_score,
+                feedback=ai_content.get("feedback", "Không có nhận xét"),
                 ai_model=self.model,
                 error=None
             )
+
+            # return GradingResponse(
+            #     score=8.0,
+            #     feedback="Bài làm tốt, đáp ứng yêu cầu đề bài.",
+            #     ai_model=self.model,
+            #     error=None
+            # )
 
         except ValueError as ve:
             # Lỗi do token quá dài (Logic nghiệp vụ)
