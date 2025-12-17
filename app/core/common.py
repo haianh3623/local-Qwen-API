@@ -20,7 +20,7 @@ async def process_upload_files(
     if not file_input:
         return ""
 
-    logger.info(f"Processing file input: {file_input}")
+    # logger.info(f"Processing file input: {file_input}")
 
     # Chuẩn hóa đầu vào thành list
     files_to_process = file_input if isinstance(file_input, list) else [file_input]

@@ -84,6 +84,8 @@ class TaskRunner:
         if settings.SHARED_SECRET_KEY:
             headers["Authorization"] = f"Bearer {settings.SHARED_SECRET_KEY}"
 
+        print("Secret key ", settings.SHARED_SECRET_KEY[:5])
+
         # Chuyển Pydantic model sang Dict
         json_body = payload.model_dump()
 

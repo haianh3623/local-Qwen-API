@@ -43,7 +43,7 @@ async def grade_submission_async(
     payload: GradingRequest, # Nhận toàn bộ dữ liệu dưới dạng JSON
     background_tasks: BackgroundTasks
 ):
-    logger.info("Payload: %s", payload)
+    # logger.info("Payload: %s", payload)
 
     # 1. Sinh ID nếu thiếu (Truy cập qua payload.request_id)
     req_id = payload.request_id
@@ -72,8 +72,8 @@ async def grade_submission_async(
         "teacher_instruction": payload.teacher_instruction,
         "max_score": payload.max_score
     }
-    logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
-    logger.info(f"Grading Data: {grading_data}")
+    # logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
+    # logger.info(f"Grading Data: {grading_data}")
 
     # 5. Đẩy vào Background Task
     background_tasks.add_task(
