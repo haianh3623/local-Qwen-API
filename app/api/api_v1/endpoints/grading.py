@@ -1,71 +1,91 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
-from typing import List, Optional, Union
+from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional
 import uuid
+import logging
 
-# Import đúng các module đã sửa
+# Import các module (Giữ nguyên như cũ)
 from app.services.llm_service import llm_service
 from app.core.task_runner import task_runner
+# LƯU Ý: Bạn cần đảm bảo hàm process_upload_files trong common.py 
+# đã được sửa để có thể đọc nội dung file từ đường dẫn (path string).
 from app.core.common import process_upload_files, validate_submission_content 
-# (Đảm bảo bạn đã có file app/core/common.py từ bước trước)
+
+logger = logging.getLogger("grading_endpoint")
 
 router = APIRouter()
 
-@router.post("/async-batch", status_code=202)
-async def grade_submission_async(
+# 1. Định nghĩa Data Model (Dùng cho JSON Body)
+class GradingRequest(BaseModel):
     # --- Meta ---
-    callback_url: str = Form(..., description="Webhook URL nhận kết quả"),
-    request_id: str = Form(None),
+    callback_url: str
+    request_id: Optional[str] = None
     
     # --- Inputs ---
-    assignment_content: str = Form(...),
-    assignment_attachments: Union[List[UploadFile], List[str], None] = File(None),
+    assignment_content: str
+    # Thay đổi: Nhận List[str] là danh sách đường dẫn file thay vì UploadFile
+    assignment_attachments: Optional[List[str]] = [] 
     
-    student_submission_text: Optional[str] = Form(None),
-    student_submission_files: Union[List[UploadFile], List[str], None] = File(None),
+    student_submission_text: Optional[str] = None
+    # Thay đổi: Nhận List[str]
+    student_submission_files: Optional[List[str]] = []
     
-    reference_answer_text: Optional[str] = Form(None),
-    reference_answer_file: Union[UploadFile, str, None] = File(None),
+    reference_answer_text: Optional[str] = None
+    # Thay đổi: Nhận str (đường dẫn đơn)
+    reference_answer_file: Optional[str] = None
     
-    grading_criteria: Optional[str] = Form(None),
-    teacher_instruction: Optional[str] = Form(None),
-    max_score: float = Form(10.0),
-    
-    # --- Background ---
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    # 1. Sinh ID nếu thiếu
-    if not request_id:
-        request_id = str(uuid.uuid4())
+    grading_criteria: Optional[str] = None
+    teacher_instruction: Optional[str] = None
+    max_score: float = 10.0
 
-    # 2. Xử lý file (Dùng hàm chung trong common.py)
-    q_files = await process_upload_files(assignment_attachments)
-    s_files = await process_upload_files(student_submission_files)
-    r_files = await process_upload_files(reference_answer_file)
+@router.post("/async-batch", status_code=202)
+async def grade_submission_async(
+    payload: GradingRequest, # Nhận toàn bộ dữ liệu dưới dạng JSON
+    background_tasks: BackgroundTasks
+):
+    logger.info("Payload: %s", payload)
+
+    # 1. Sinh ID nếu thiếu (Truy cập qua payload.request_id)
+    req_id = payload.request_id
+    if not req_id:
+        req_id = str(uuid.uuid4())
+
+    # 2. Xử lý file 
+    # Lưu ý: Hàm này bây giờ sẽ nhận vào List[str] (đường dẫn). 
+    # Logic bên trong cần mở file tại đường dẫn đó để đọc nội dung.
+    q_files = await process_upload_files(payload.assignment_attachments)
+    s_files = await process_upload_files(payload.student_submission_files)
+    
+    # Xử lý reference_file (vì đây là str đơn, có thể cần đưa vào list để xử lý chung hoặc xử lý riêng)
+    r_files_input = [payload.reference_answer_file] if payload.reference_answer_file else []
+    r_files = await process_upload_files(r_files_input)
 
     # 3. Validate
-    validate_submission_content(student_submission_text, s_files)
+    validate_submission_content(payload.student_submission_text, s_files)
 
     # 4. Gom dữ liệu
     grading_data = {
-        "question": assignment_content + q_files,
-        "submission": (student_submission_text or "") + s_files,
-        "reference": (reference_answer_text or "") + r_files,
-        "rubric": grading_criteria,
-        "teacher_instruction": teacher_instruction,
-        "max_score": max_score
+        "question": payload.assignment_content + q_files,
+        "submission": (payload.student_submission_text or "") + s_files,
+        "reference": (payload.reference_answer_text or "") + r_files,
+        "rubric": payload.grading_criteria,
+        "teacher_instruction": payload.teacher_instruction,
+        "max_score": payload.max_score
     }
+    logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
+    logger.info(f"Grading Data: {grading_data}")
 
-    # 5. Đẩy vào Background Task (Dùng Task Runner)
+    # 5. Đẩy vào Background Task
     background_tasks.add_task(
-        task_runner.run_task_and_callback,      # Gọi hàm điều phối của Task Runner
-        processing_function=llm_service.grade_submission, # Truyền hàm logic chấm điểm vào
-        input_data=grading_data,                # Truyền dữ liệu vào
-        callback_url=callback_url,
-        request_id=request_id
+        task_runner.run_task_and_callback,
+        processing_function=llm_service.grade_submission,
+        input_data=grading_data,
+        callback_url=payload.callback_url,
+        request_id=req_id
     )
 
     return {
         "status": "queued",
         "message": "Đã tiếp nhận vào hàng đợi.",
-        "request_id": request_id
+        "request_id": req_id
     }

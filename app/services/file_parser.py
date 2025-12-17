@@ -1,6 +1,8 @@
 import io
+import os
 import logging
 import re
+import aiofiles
 from fastapi import UploadFile
 from pypdf import PdfReader
 from docx import Document
@@ -20,52 +22,53 @@ class FileParserService:
         text = text.replace('\t', ' ').replace('\u00a0', ' ')
 
         # 2. Xử lý lỗi "mỗi từ một dòng" của PDF
-        # Tách thành các đoạn văn (dựa trên 2 dấu xuống dòng trở lên)
         paragraphs = re.split(r'\n\s*\n', text)
         
         cleaned_paragraphs = []
         for p in paragraphs:
-            # Trong mỗi đoạn, thay thế dấu xuống dòng đơn lẻ bằng dấu cách
             clean_p = re.sub(r'\n+', ' ', p).strip()
-            # Xóa khoảng trắng kép
             clean_p = re.sub(r'\s+', ' ', clean_p)
             if clean_p:
                 cleaned_paragraphs.append(clean_p)
         
-        # Ghép lại các đoạn văn bằng dấu xuống dòng chuẩn
         return "\n\n".join(cleaned_paragraphs)
 
-    async def parse_file_to_text(self, file: UploadFile) -> str:
+    def _format_response(self, filename: str, content: str, error_msg: str = None) -> str:
         """
-        Đọc file và trả về nội dung được bọc trong thẻ XML.
-        Output format:
-        <file_attachment name="filename.ext">
-        ... content ...
-        </file_attachment>
+        Đóng gói kết quả vào thẻ XML.
         """
-        if not file:
-            return ""
+        safe_filename = filename.replace('"', '').replace('<', '').replace('>', '')
         
-        original_filename = file.filename
-        # Chuẩn hóa tên file để tránh lỗi nếu tên file chứa ký tự lạ
-        safe_filename = original_filename.replace('"', '').replace('<', '').replace('>', '')
-        
-        filename = original_filename.lower()
-        content_bytes = await file.read()
+        if error_msg:
+            return f"""
+<file_attachment name="{safe_filename}">
+[SYSTEM ERROR: {error_msg}]
+</file_attachment>
+"""
+        return f"""
+<file_attachment name="{safe_filename}">
+{content}
+</file_attachment>
+"""
+
+    def _extract_text_from_bytes(self, content_bytes: bytes, filename: str) -> str:
+        """
+        Logic cốt lõi: Chuyển đổi bytes thành text dựa trên đuôi file.
+        Trả về: (text_content, error_message)
+        """
+        filename = filename.lower()
         file_text = ""
-        error_msg = None
 
         try:
             # --- CASE 1: FILE TEXT ---
             if filename.endswith((".txt", ".md", ".json", ".py", ".php", ".html", ".css", ".js", ".java", ".cpp")):
-                file_text = content_bytes.decode("utf-8", errors="ignore")
+                return self._clean_text(content_bytes.decode("utf-8", errors="ignore")), None
 
             # --- CASE 2: FILE PDF ---
             elif filename.endswith(".pdf"):
                 try:
                     pdf_reader = PdfReader(io.BytesIO(content_bytes))
                     for page in pdf_reader.pages:
-                        # Ưu tiên chế độ layout để giữ bố cục
                         try:
                             text = page.extract_text(extraction_mode="layout")
                         except:
@@ -74,10 +77,11 @@ class FileParserService:
                             file_text += text + "\n"
                     
                     if not file_text.strip():
-                        error_msg = "File PDF này không chứa văn bản (có thể là file scan/ảnh)."
-
+                        return "", "File PDF này không chứa văn bản (có thể là file scan/ảnh)."
+                    
+                    return self._clean_text(file_text), None
                 except Exception as pdf_err:
-                    error_msg = f"Lỗi đọc PDF: {str(pdf_err)}"
+                    return "", f"Lỗi đọc PDF: {str(pdf_err)}"
 
             # --- CASE 3: FILE WORD ---
             elif filename.endswith(".docx"):
@@ -85,41 +89,50 @@ class FileParserService:
                     doc = Document(io.BytesIO(content_bytes))
                     for para in doc.paragraphs:
                         file_text += para.text + "\n"
+                    return self._clean_text(file_text), None
                 except Exception as docx_err:
-                    error_msg = f"Lỗi đọc DOCX: {str(docx_err)}"
+                    return "", f"Lỗi đọc DOCX: {str(docx_err)}"
             
             # --- CASE 4: KHÔNG HỖ TRỢ ---
             else:
-                error_msg = f"Định dạng file không được hỗ trợ."
-
-            # Reset con trỏ file
-            await file.seek(0)
-            
-            # Xử lý kết quả trả về
-            if error_msg:
-                # Trả về thẻ lỗi để AI biết file này có vấn đề
-                return f"""
-<file_attachment name="{safe_filename}">
-[SYSTEM ERROR: {error_msg}]
-</file_attachment>
-"""
-
-            # Làm sạch văn bản
-            cleaned_text = self._clean_text(file_text)
-            
-            # Trả về nội dung bọc trong thẻ
-            return f"""
-<file_attachment name="{safe_filename}">
-{cleaned_text}
-</file_attachment>
-"""
+                return "", "Định dạng file không được hỗ trợ."
 
         except Exception as e:
-            logger.error(f"Critical error parsing {original_filename}: {e}")
-            return f"""
-<file_attachment name="{safe_filename}">
-[SYSTEM CRITICAL ERROR: {str(e)}]
-</file_attachment>
-"""
+            logger.error(f"Critical error parsing {filename}: {e}")
+            return "", f"Critical Parsing Error: {str(e)}"
+
+    async def parse_upload_file(self, file: UploadFile) -> str:
+        """
+        Xử lý file từ UploadFile (API Form Data)
+        """
+        if not file: return ""
+        try:
+            content_bytes = await file.read()
+            text, error = self._extract_text_from_bytes(content_bytes, file.filename)
+            
+            # Reset con trỏ file sau khi đọc
+            await file.seek(0)
+            
+            return self._format_response(file.filename, text, error)
+        except Exception as e:
+            return self._format_response(file.filename, "", str(e))
+
+    async def parse_local_file(self, file_path: str) -> str:
+        """
+        Xử lý file từ đường dẫn cứng trên server
+        """
+        if not os.path.exists(file_path):
+            return ""
+        
+        filename = os.path.basename(file_path)
+        try:
+            # Đọc file dưới dạng binary
+            async with aiofiles.open(file_path, mode='rb') as f:
+                content_bytes = await f.read()
+            
+            text, error = self._extract_text_from_bytes(content_bytes, filename)
+            return self._format_response(filename, text, error)
+        except Exception as e:
+            return self._format_response(filename, "", f"Lỗi đọc file local: {str(e)}")
 
 file_parser = FileParserService()

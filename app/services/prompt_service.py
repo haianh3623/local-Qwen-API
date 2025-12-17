@@ -75,7 +75,7 @@ class PromptService:
 """
         
         # Ghi log để kiểm tra
-        self._log_prompt_to_file(prompt.strip(), "latest_grading_prompt.txt")
+        # self._log_prompt_to_file(prompt.strip(), "latest_grading_prompt.txt")
         
         return prompt.strip()
 

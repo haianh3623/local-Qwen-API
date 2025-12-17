@@ -28,6 +28,7 @@ class TaskRunner:
         callback_url: str,
         request_id: str
     ):
+        # return True
         logger.info(f"⏳ [Queue] Request {request_id} đang chờ slot xử lý...")
         
         async with global_semaphore:
