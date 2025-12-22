@@ -22,6 +22,7 @@ class GradingRequest(BaseModel):
     request_id: Optional[str] = None
     
     # --- Inputs ---
+    course_id: Optional[str] = None
     assignment_content: str
     # Thay đổi: Nhận List[str] là danh sách đường dẫn file thay vì UploadFile
     assignment_attachments: Optional[List[str]] = [] 
@@ -54,6 +55,8 @@ async def grade_submission_async(
     # Lưu ý: Hàm này bây giờ sẽ nhận vào List[str] (đường dẫn). 
     # Logic bên trong cần mở file tại đường dẫn đó để đọc nội dung.
     q_files = await process_upload_files(payload.assignment_attachments)
+    logger.info(f"Processed {payload.assignment_attachments} question attachment files.")
+    
     s_files = await process_upload_files(payload.student_submission_files)
     
     # Xử lý reference_file (vì đây là str đơn, có thể cần đưa vào list để xử lý chung hoặc xử lý riêng)
@@ -65,6 +68,7 @@ async def grade_submission_async(
 
     # 4. Gom dữ liệu
     grading_data = {
+        "course_id": payload.course_id,
         "question": payload.assignment_content + q_files,
         "submission": (payload.student_submission_text or "") + s_files,
         "reference": (payload.reference_answer_text or "") + r_files,
@@ -72,8 +76,8 @@ async def grade_submission_async(
         "teacher_instruction": payload.teacher_instruction,
         "max_score": payload.max_score
     }
-    # logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
-    # logger.info(f"Grading Data: {grading_data}")
+    logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
+    logger.info(f"Grading Data: {grading_data}")
 
     # 5. Đẩy vào Background Task
     background_tasks.add_task(

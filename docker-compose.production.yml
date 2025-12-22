@@ -19,6 +19,7 @@ services:
     volumes:
       - .:/app                 # Map code
       - ./api_data:/app/data   # Map thư mục data chứa json config
+      - ./data:/app/data
     depends_on:
       - ollama
     networks:

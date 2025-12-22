@@ -75,12 +75,20 @@ class LLMService:
         try:
             # 1. Tạo Prompt (Logic nằm ở prompt_service để code gọn)
             prompt = prompt_service.build_grading_prompt(
+                course_id=data.get('course_id'),
                 question=data['question'],
                 submission=data['submission'],
                 max_score=data['max_score'],
                 reference=data.get('reference'),
                 rubric=data.get('rubric'),
                 teacher_instruction=data.get('teacher_instruction')
+            )
+
+            return GradingResponse(
+                score=80,
+                feedback="Bài làm tốt, nhưng cần cải thiện phần lập luận.",
+                ai_model=self.model,
+                error=None
             )
             
             # 2. Cấu hình payload
@@ -121,15 +129,9 @@ class LLMService:
             final_score = min(raw_score, max_allowed)
 
             # 6. Trả về Object chuẩn
-            return GradingResponse(
-                score=final_score,
-                feedback=ai_content.get("feedback", "Không có nhận xét chi tiết."),
-                ai_model=self.model,
-                error=None
-            )
             # return GradingResponse(
-            #     score=80,
-            #     feedback="Bài làm tốt, nhưng cần cải thiện phần lập luận.",
+            #     score=final_score,
+            #     feedback=ai_content.get("feedback", "Không có nhận xét chi tiết."),
             #     ai_model=self.model,
             #     error=None
             # )

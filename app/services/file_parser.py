@@ -2,136 +2,107 @@ import io
 import os
 import logging
 import re
+import fitz  # PyMuPDF
 import aiofiles
 from fastapi import UploadFile
-from pypdf import PdfReader
+from fastapi.concurrency import run_in_threadpool
 from docx import Document
 
-# Cấu hình logging
 logger = logging.getLogger("file_parser")
 logger.setLevel(logging.INFO)
 
 class FileParserService:
+    def __init__(self):
+        # Pre-compile regex để tối ưu hiệu năng
+        self.pattern_whitespace = re.compile(r'\s+')
+        self.pattern_paragraphs = re.compile(r'\n\s*\n')
+        self.pattern_newlines = re.compile(r'\n+')
+
     def _clean_text(self, text: str) -> str:
-        """
-        Làm sạch văn bản: nối các dòng bị ngắt quãng, xóa ký tự lạ.
-        """
         if not text: return ""
-
-        # 1. Thay thế các khoảng trắng đặc biệt
-        text = text.replace('\t', ' ').replace('\u00a0', ' ')
-
-        # 2. Xử lý lỗi "mỗi từ một dòng" của PDF
-        paragraphs = re.split(r'\n\s*\n', text)
         
+        # Chuẩn hóa khoảng trắng cơ bản
+        text = text.replace('\t', ' ').replace('\u00a0', ' ')
+        
+        # Tách đoạn văn bản dựa trên dòng trống
+        paragraphs = self.pattern_paragraphs.split(text)
         cleaned_paragraphs = []
+        
         for p in paragraphs:
-            clean_p = re.sub(r'\n+', ' ', p).strip()
-            clean_p = re.sub(r'\s+', ' ', clean_p)
+            # Nối các dòng bị ngắt trong cùng 1 đoạn, xóa khoảng trắng thừa
+            clean_p = self.pattern_newlines.sub(' ', p).strip()
+            clean_p = self.pattern_whitespace.sub(' ', clean_p)
             if clean_p:
                 cleaned_paragraphs.append(clean_p)
-        
+                
         return "\n\n".join(cleaned_paragraphs)
 
     def _format_response(self, filename: str, content: str, error_msg: str = None) -> str:
-        """
-        Đóng gói kết quả vào thẻ XML.
-        """
         safe_filename = filename.replace('"', '').replace('<', '').replace('>', '')
-        
         if error_msg:
-            return f"""
-<file_attachment name="{safe_filename}">
-[SYSTEM ERROR: {error_msg}]
-</file_attachment>
-"""
-        return f"""
-<file_attachment name="{safe_filename}">
-{content}
-</file_attachment>
-"""
+            return f'<file_attachment name="{safe_filename}">\n[SYSTEM ERROR: {error_msg}]\n</file_attachment>'
+        return f'<file_attachment name="{safe_filename}">\n{content}\n</file_attachment>'
 
-    def _extract_text_from_bytes(self, content_bytes: bytes, filename: str) -> str:
-        """
-        Logic cốt lõi: Chuyển đổi bytes thành text dựa trên đuôi file.
-        Trả về: (text_content, error_message)
-        """
+    def _parse_pdf(self, content_bytes: bytes) -> str:
+        text = ""
+        # fitz mở file từ memory cực nhanh và an toàn
+        with fitz.open(stream=content_bytes, filetype="pdf") as doc:
+            for page in doc:
+                # flags=~fitz.TEXT_PRESERVE_IMAGES giúp bỏ qua ảnh, tránh lỗi crash
+                text += page.get_text(sort=True) + "\n"
+        return text
+
+    def _parse_docx(self, content_bytes: bytes) -> str:
+        doc = Document(io.BytesIO(content_bytes))
+        return "\n".join([para.text for para in doc.paragraphs])
+
+    def _process_content_sync(self, content_bytes: bytes, filename: str) -> str:
+        """Hàm xử lý logic nặng (CPU bound), sẽ chạy trong thread pool"""
         filename = filename.lower()
-        file_text = ""
-
+        raw_text = ""
+        
         try:
-            # --- CASE 1: FILE TEXT ---
-            if filename.endswith((".txt", ".md", ".json", ".py", ".php", ".html", ".css", ".js", ".java", ".cpp")):
-                return self._clean_text(content_bytes.decode("utf-8", errors="ignore")), None
-
-            # --- CASE 2: FILE PDF ---
-            elif filename.endswith(".pdf"):
-                try:
-                    pdf_reader = PdfReader(io.BytesIO(content_bytes))
-                    for page in pdf_reader.pages:
-                        try:
-                            text = page.extract_text(extraction_mode="layout")
-                        except:
-                            text = page.extract_text()
-                        if text:
-                            file_text += text + "\n"
-                    
-                    if not file_text.strip():
-                        return "", "File PDF này không chứa văn bản (có thể là file scan/ảnh)."
-                    
-                    return self._clean_text(file_text), None
-                except Exception as pdf_err:
-                    return "", f"Lỗi đọc PDF: {str(pdf_err)}"
-
-            # --- CASE 3: FILE WORD ---
-            elif filename.endswith(".docx"):
-                try:
-                    doc = Document(io.BytesIO(content_bytes))
-                    for para in doc.paragraphs:
-                        file_text += para.text + "\n"
-                    return self._clean_text(file_text), None
-                except Exception as docx_err:
-                    return "", f"Lỗi đọc DOCX: {str(docx_err)}"
+            if filename.endswith((".txt", ".md", ".py", ".java", ".cpp", ".json", ".html", ".css", ".js", ".php")):
+                raw_text = content_bytes.decode("utf-8", errors="ignore")
             
-            # --- CASE 4: KHÔNG HỖ TRỢ ---
+            elif filename.endswith(".pdf"):
+                raw_text = self._parse_pdf(content_bytes)
+                if not raw_text.strip():
+                    raise ValueError("PDF không chứa văn bản (có thể là file scan/ảnh)")
+
+            elif filename.endswith(".docx"):
+                raw_text = self._parse_docx(content_bytes)
+            
             else:
-                return "", "Định dạng file không được hỗ trợ."
+                return self._format_response(filename, "", "Định dạng file không được hỗ trợ")
+
+            cleaned_text = self._clean_text(raw_text)
+            return self._format_response(filename, cleaned_text, None)
 
         except Exception as e:
-            logger.error(f"Critical error parsing {filename}: {e}")
-            return "", f"Critical Parsing Error: {str(e)}"
+            logger.error(f"Error parsing {filename}: {e}")
+            return self._format_response(filename, "", str(e))
 
     async def parse_upload_file(self, file: UploadFile) -> str:
-        """
-        Xử lý file từ UploadFile (API Form Data)
-        """
         if not file: return ""
         try:
-            content_bytes = await file.read()
-            text, error = self._extract_text_from_bytes(content_bytes, file.filename)
-            
-            # Reset con trỏ file sau khi đọc
+            content = await file.read()
+            # Đẩy việc xử lý nặng sang thread khác để không chặn API
+            result = await run_in_threadpool(self._process_content_sync, content, file.filename)
             await file.seek(0)
-            
-            return self._format_response(file.filename, text, error)
+            return result
         except Exception as e:
             return self._format_response(file.filename, "", str(e))
 
     async def parse_local_file(self, file_path: str) -> str:
-        """
-        Xử lý file từ đường dẫn cứng trên server
-        """
         if not os.path.exists(file_path):
             return ""
-        
         filename = os.path.basename(file_path)
         try:
-            # Đọc file dưới dạng binary
             async with aiofiles.open(file_path, mode='rb') as f:
-                content_bytes = await f.read()
-            
-            text, error = self._extract_text_from_bytes(content_bytes, filename)
-            return self._format_response(filename, text, error)
+                content = await f.read()
+            # Tái sử dụng logic qua thread pool
+            return await run_in_threadpool(self._process_content_sync, content, filename)
         except Exception as e:
             return self._format_response(filename, "", f"Lỗi đọc file local: {str(e)}")
 
