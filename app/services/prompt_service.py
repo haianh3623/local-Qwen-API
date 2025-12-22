@@ -159,7 +159,7 @@ Hãy viết bản hướng dẫn chi tiết dựa trên <raw_data> ở trên. B�
 </output_directive>
 """
         
-        self._log_prompt_to_file(prompt.strip(), "latest_rubric_prompt.txt")
+        # self._log_prompt_to_file(prompt.strip(), "latest_rubric_prompt.txt")
         
         return prompt.strip()
 

@@ -33,7 +33,7 @@ class RagService:
         )
 
     def _get_loader(self, file_path: str):
-        logger.info(f"🗂️ [RAG] Getting loader for file: {file_path}")
+        # logger.info(f"🗂️ [RAG] Getting loader for file: {file_path}")
 
         if file_path.endswith(".pdf"):
             return PyMuPDFLoader(file_path)
@@ -55,7 +55,7 @@ class RagService:
         
         # 2. Stream Processing: Đọc trang -> Split -> Gom Batch -> Embed -> Xả RAM
         for page in pages_iterator:
-            logger.info(f"🗂️ [RAG] Processing page {page.metadata.get('page', 'unknown')} of file {file_path}")
+            # logger.info(f"🗂️ [RAG] Processing page {page.metadata.get('page', 'unknown')} of file {file_path}")
             # Split ngay từng trang
             page_chunks = self.text_splitter.split_documents([page])
             

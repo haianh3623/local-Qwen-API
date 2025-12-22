@@ -55,7 +55,7 @@ async def grade_submission_async(
     # Lưu ý: Hàm này bây giờ sẽ nhận vào List[str] (đường dẫn). 
     # Logic bên trong cần mở file tại đường dẫn đó để đọc nội dung.
     q_files = await process_upload_files(payload.assignment_attachments)
-    logger.info(f"Processed {payload.assignment_attachments} question attachment files.")
+    # logger.info(f"Processed {payload.assignment_attachments} question attachment files.")
     
     s_files = await process_upload_files(payload.student_submission_files)
     
@@ -76,8 +76,8 @@ async def grade_submission_async(
         "teacher_instruction": payload.teacher_instruction,
         "max_score": payload.max_score
     }
-    logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
-    logger.info(f"Grading Data: {grading_data}")
+    # logger.info(f"📝 [Request Prepared] ID: {req_id}, Preparing to queue grading task.")
+    # logger.info(f"Grading Data: {grading_data}")
 
     # 5. Đẩy vào Background Task
     background_tasks.add_task(

@@ -84,12 +84,12 @@ class LLMService:
                 teacher_instruction=data.get('teacher_instruction')
             )
 
-            return GradingResponse(
-                score=80,
-                feedback="Bài làm tốt, nhưng cần cải thiện phần lập luận.",
-                ai_model=self.model,
-                error=None
-            )
+            # return GradingResponse(
+            #     score=80,
+            #     feedback="Bài làm tốt, nhưng cần cải thiện phần lập luận.",
+            #     ai_model=self.model,
+            #     error=None
+            # )
             
             # 2. Cấu hình payload
             payload = {
@@ -129,12 +129,12 @@ class LLMService:
             final_score = min(raw_score, max_allowed)
 
             # 6. Trả về Object chuẩn
-            # return GradingResponse(
-            #     score=final_score,
-            #     feedback=ai_content.get("feedback", "Không có nhận xét chi tiết."),
-            #     ai_model=self.model,
-            #     error=None
-            # )
+            return GradingResponse(
+                score=final_score,
+                feedback=ai_content.get("feedback", "Không có nhận xét chi tiết."),
+                ai_model=self.model,
+                error=None
+            )
 
         except ValueError as ve:
             # Lỗi do Logic (VD: Token quá dài)
