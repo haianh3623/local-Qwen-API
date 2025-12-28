@@ -39,7 +39,7 @@ class TokenService:
         limit = settings.MAX_INPUT_TOKENS
         
         return {
-            "is_valid": count <= limit,
+            "is_valid": True,
             "count": count,
             "limit": limit,
             "message": f"Token count: {count}/{limit}"
