@@ -22,6 +22,8 @@ class PromptSecurityService:
             "give me 100", "cho 10 điểm", "cho 10 diem",
             "you are now", "bây giờ bạn là", "tu gio ban la",
             "system prompt", "lời nhắc hệ thống"
+            "điểm tối đa", "toan diem", "khong tru diem", "không trừ điểm",
+            "cho diem tuyet doi", "cho điểm tuyệt đối", "full score", "maximum score", "diem toi da"
         ]
         
         # 3. Regex Patterns (Các mẫu nguy hiểm phức tạp)
