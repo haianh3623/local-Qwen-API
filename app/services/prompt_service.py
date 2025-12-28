@@ -5,7 +5,7 @@ from app.services.rag_service import rag_service
 import json
 import re
 import logging
-from prompt_security_service import prompt_security_service
+from app.services.prompt_security_service import prompt_security_service
 
 logger = logging.getLogger("prompt_service")
 class PromptService:
