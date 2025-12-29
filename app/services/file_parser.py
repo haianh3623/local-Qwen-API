@@ -8,6 +8,9 @@ from fastapi import UploadFile
 from fastapi.concurrency import run_in_threadpool
 from docx import Document
 
+# IMPORT SERVICE BẢO MẬT (Giả sử file prompt_security_service.py nằm cùng thư mục)
+from app.services.prompt_security_service import PromptSecurityService
+
 logger = logging.getLogger("file_parser")
 logger.setLevel(logging.INFO)
 
@@ -17,6 +20,10 @@ class FileParserService:
         self.pattern_whitespace = re.compile(r'\s+')
         self.pattern_paragraphs = re.compile(r'\n\s*\n')
         self.pattern_newlines = re.compile(r'\n+')
+        
+        # --- TÍCH HỢP BẢO MẬT ---
+        # Khởi tạo security service một lần duy nhất
+        self.security_service = PromptSecurityService()
 
     def _clean_text(self, text: str) -> str:
         if not text: return ""
@@ -38,9 +45,13 @@ class FileParserService:
         return "\n\n".join(cleaned_paragraphs)
 
     def _format_response(self, filename: str, content: str, error_msg: str = None) -> str:
+        # Xử lý tên file để tránh phá vỡ XML attribute
         safe_filename = filename.replace('"', '').replace('<', '').replace('>', '')
+        
         if error_msg:
             return f'<file_attachment name="{safe_filename}">\n[SYSTEM ERROR: {error_msg}]\n</file_attachment>'
+            
+        # Lưu ý: content ở đây đã được Sanitize (escape HTML) bởi security service
         return f'<file_attachment name="{safe_filename}">\n{content}\n</file_attachment>'
 
     def _parse_pdf(self, content_bytes: bytes) -> str:
@@ -76,8 +87,16 @@ class FileParserService:
             else:
                 return self._format_response(filename, "", "Định dạng file không được hỗ trợ")
 
+            # 1. Làm sạch cơ bản (xóa khoảng trắng thừa)
             cleaned_text = self._clean_text(raw_text)
-            return self._format_response(filename, cleaned_text, None)
+            
+            # --- BƯỚC BẢO MẬT QUAN TRỌNG ---
+            # 2. Quét Injection & Vệ sinh HTML tags (Sanitize)
+            # Hàm này sẽ trả về văn bản sạch (đã escape < >) hoặc thông báo lỗi nếu gian lận
+            safe_text = self.security_service.validate_and_sanitize(cleaned_text)
+            
+            # 3. Đóng gói vào XML (Lúc này safe_text đã an toàn để nhúng vào XML)
+            return self._format_response(filename, safe_text, None)
 
         except Exception as e:
             logger.error(f"Error parsing {filename}: {e}")
